@@ -1,0 +1,185 @@
+DEFINE
+
+// ---------------- 1. KPI ----------------
+MEASURE Gold[Close Price] =
+    VAR d = MAX ( Gold[Date] )
+    RETURN CALCULATE ( MAX ( Gold[Close] ), Gold[Date] = d )
+
+MEASURE Gold[Start Price] =
+    VAR d = MIN ( Gold[Date] )
+    RETURN CALCULATE ( MAX ( Gold[Close] ), Gold[Date] = d )
+
+MEASURE Gold[Peak Price] = MAX ( Gold[Close] )
+
+MEASURE Gold[Lowest Price] = MIN ( Gold[Close] )
+
+MEASURE Gold[Period Return %] =
+    DIVIDE ( [Close Price], [Start Price] ) - 1
+
+MEASURE Gold[YTD Return %] =
+    VAR yr        = YEAR ( MAX ( Gold[Date] ) )
+    VAR prevDate  = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr - 1 )
+    VAR prevClose = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = prevDate )
+    RETURN IF ( ISBLANK ( prevClose ), BLANK (), DIVIDE ( [Close Price], prevClose ) - 1 )
+EVALUATE ROW ( "Check", [YTD Return %] )
+
+MEASURE Gold[CAGR %] =
+    VAR n = DATEDIFF ( MIN ( Gold[Date] ), MAX ( Gold[Date] ), DAY ) / 365.25
+    RETURN IF ( n > 0, POWER ( DIVIDE ( [Close Price], [Start Price] ), 1 / n ) - 1 )
+
+// ---------------- 2. RETURNS (annual, monthly, daily) ----------------
+MEASURE Gold[Annual Return %] =
+    VAR yr     = MAX ( 'Calendar'[Year] )
+    VAR prevD  = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr - 1 )
+    VAR firstD = CALCULATE ( MIN ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr )
+    VAR lastD  = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr )
+    VAR baseD  = IF ( ISBLANK ( prevD ), firstD, prevD )
+    VAR c0     = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = baseD )
+    VAR c1     = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = lastD )
+    RETURN DIVIDE ( c1, c0 ) - 1
+
+// Monthly Return %: matrix Calendar[Year] (rows) x Calendar[MonthName] (columns)
+MEASURE Gold[Monthly Return %] =
+    VAR y     = MAX ( 'Calendar'[Year] )
+    VAR m     = MAX ( 'Calendar'[MonthNum] )
+    VAR lastD = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = y, Gold[MonthNum] = m )
+    VAR prevD = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] < DATE ( y, m, 1 ) )
+    VAR c1    = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = lastD )
+    VAR c0    = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = prevD )
+    RETURN IF ( ISBLANK ( c0 ) || ISBLANK ( c1 ), BLANK (), DIVIDE ( c1, c0 ) - 1 )
+
+MEASURE Gold[Daily Return %] = AVERAGE ( Gold[DailyReturn] )
+
+// ---------------- 3. TREND ----------------
+MEASURE Gold[MA 50] =
+    VAR d   = MAX ( Gold[Date] )
+    VAR win = TOPN ( 50, FILTER ( ALL ( Gold ), Gold[Date] <= d ), Gold[Date], DESC )
+    RETURN IF ( COUNTROWS ( win ) = 50, AVERAGEX ( win, Gold[Close] ) )
+
+MEASURE Gold[MA 200] =
+    VAR d   = MAX ( Gold[Date] )
+    VAR win = TOPN ( 200, FILTER ( ALL ( Gold ), Gold[Date] <= d ), Gold[Date], DESC )
+    RETURN IF ( COUNTROWS ( win ) = 200, AVERAGEX ( win, Gold[Close] ) )
+
+MEASURE Gold[Trend Signal] =
+    IF ( [MA 50] > [MA 200], "Bullish (MA50 > MA200)", "Bearish (MA50 < MA200)" )
+
+// ---------------- 4. RISK ----------------
+MEASURE Gold[Running Peak] =
+    VAR d = MAX ( Gold[Date] )
+    RETURN MAXX ( FILTER ( ALL ( Gold ), Gold[Date] <= d ), Gold[Close] )
+
+MEASURE Gold[Drawdown %] =
+    DIVIDE ( MAX ( Gold[Close] ), [Running Peak] ) - 1
+
+MEASURE Gold[Max Drawdown %] =
+    MINX ( VALUES ( Gold[Date] ), [Drawdown %] )
+
+MEASURE Gold[Max Drawdown Date] =
+    VAR mdd = [Max Drawdown %]
+    RETURN MINX ( FILTER ( VALUES ( Gold[Date] ), [Drawdown %] = mdd ), Gold[Date] )
+
+MEASURE Gold[Volatility 30D] =
+    VAR d   = MAX ( Gold[Date] )
+    VAR win = TOPN ( 30, FILTER ( ALL ( Gold ), Gold[Date] <= d ), Gold[Date], DESC )
+    RETURN IF ( COUNTROWS ( win ) = 30, STDEVX.P ( win, Gold[DailyReturn] ) * SQRT ( 252 ) )
+
+MEASURE Gold[Volatility (Ann.)] =
+    STDEV.P ( Gold[DailyReturn] ) * SQRT ( 252 )
+
+MEASURE Gold[Avg Volatility 30D] =
+    AVERAGEX ( VALUES ( 'Calendar'[Date] ), [Volatility 30D] )
+
+MEASURE Gold[Extreme Days (>10%)] =
+    COUNTROWS ( FILTER ( Gold, ABS ( Gold[DailyReturn] ) > 0.10 ) )
+
+MEASURE Gold[Extreme Day Flag] =
+    VAR r    = [Daily Return %]
+    VAR t    = ALLSELECTED ( Gold )
+    VAR up   = COUNTROWS ( FILTER ( t, Gold[DailyReturn] > r ) )
+    VAR down = COUNTROWS ( FILTER ( t, Gold[DailyReturn] < r ) )
+    RETURN IF ( NOT ISBLANK ( r ) && ( up < 3 || down < 3 ), 1 )
+
+MEASURE Gold[Extreme Day Color] =
+    IF ( [Daily Return %] >= 0, "#0B2A4A", "#E4572E" )
+
+EVALUATE
+ROW ( "Extreme days found", COUNTROWS ( FILTER ( VALUES ( Gold[Date] ), [Extreme Day Flag] = 1 ) ) )
+
+// ---------------- 5. VOLUME & DAILY BEHAVIOR ----------------
+MEASURE Gold[Avg Daily Volume] = AVERAGE ( Gold[Volume] )
+
+MEASURE Gold[Total Turnover] = SUM ( Gold[Turnover] )
+
+MEASURE Gold[Avg Daily Range %] = AVERAGE ( Gold[RangePct] )
+
+MEASURE Gold[Avg Opening Gap %] = AVERAGE ( Gold[GapPct] )
+
+MEASURE Gold[Volume Spike Flag] =
+    VAR d   = MAX ( Gold[Date] )
+    VAR v   = SUM ( Gold[Volume] )
+    VAR win = TOPN ( 30, FILTER ( ALL ( Gold ), Gold[Date] < d ), Gold[Date], DESC )
+    RETURN IF ( COUNTROWS ( win ) = 30 && v > 2 * AVERAGEX ( win, Gold[Volume] ), 1, 0 )
+
+MEASURE Gold[Volume Spike Days] =
+    SUMX ( VALUES ( Gold[Date] ), [Volume Spike Flag] )
+
+// ---------------- 6. DASHBOARD TEXT & COLORS ----------------
+MEASURE Gold[Dashboard Subtitle] =
+    FORMAT ( MIN ( Gold[Date] ), "d mmm yyyy" ) & " – " & FORMAT ( MAX ( Gold[Date] ), "d mmm yyyy" )
+        & " · Split-adjusted close (USD)"
+
+MEASURE Gold[Year Filter Text] =
+    IF ( ISFILTERED ( 'Calendar'[Year] ),
+        "Year: " & CONCATENATEX ( VALUES ( 'Calendar'[Year] ), 'Calendar'[Year], ", ", 'Calendar'[Year], ASC ),
+        "Year: All (2014–2025)" )
+
+MEASURE Gold[Quarter Filter Text] =
+    IF ( ISFILTERED ( 'Calendar'[Quarter] ),
+        "Quarter: " & CONCATENATEX ( VALUES ( 'Calendar'[Quarter] ), 'Calendar'[Quarter], ", ", 'Calendar'[Quarter], ASC ),
+        "Quarter: All" )
+
+MEASURE Gold[Annual Return Color] =
+    IF ( [Annual Return %] >= 0, "#0B2A4A", "#E4572E" )
+
+MEASURE Gold[Data Quality Note] =
+    "Invalid OHLC rows: " & COUNTROWS ( FILTER ( Gold, Gold[OHLCValid] = FALSE () ) )
+
+// ---------------- 7. KPI "PILL" TEXTS ----------------
+MEASURE Gold[Phase Band] =
+    VAR d = MAX ( 'Calendar'[Date] )
+    RETURN IF ( YEAR ( d ) <= 2016 || ( YEAR ( d ) >= 2020 && YEAR ( d ) <= 2021 ) || YEAR ( d ) = 2025, 1 )
+
+MEASURE Gold[Peak Marker] =
+    VAR pk = CALCULATE ( MAX ( Gold[Close] ), ALLSELECTED ( 'Calendar' ) )
+    RETURN IF ( [Close Price] = pk, [Close Price] )
+
+MEASURE Gold[Low Marker] =
+    VAR lw = CALCULATE ( MIN ( Gold[Close] ), ALLSELECTED ( 'Calendar' ) )
+    RETURN IF ( [Close Price] = lw, [Close Price] )
+
+MEASURE Gold[Pill Close Price] =
+    "▼ " & FORMAT ( ABS ( DIVIDE ( [Close Price], [Peak Price] ) - 1 ), "0%" ) & " below peak"
+
+MEASURE Gold[Pill YTD Return] =
+    VAR yr        = YEAR ( MAX ( Gold[Date] ) )
+    VAR prevDate  = CALCULATE ( MAX ( Gold[Date] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr - 1 )
+    VAR prevClose = CALCULATE ( MAX ( Gold[Close] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Date] = prevDate )
+    RETURN "▲ vs $" & FORMAT ( prevClose, "0.00" ) & " end-" & ( yr - 1 )
+
+MEASURE Gold[Pill CAGR] =
+    "▲ from $" & FORMAT ( [Start Price], "0.00" ) & " in " & YEAR ( MIN ( Gold[Date] ) )
+
+MEASURE Gold[Pill Max Drawdown] =
+    "▼ trough " & FORMAT ( [Max Drawdown Date], "d mmm yyyy" )
+
+MEASURE Gold[Pill Volatility] =
+    VAR d = MAX ( Gold[Date] )
+    RETURN "● 30D now: " & FORMAT ( CALCULATE ( [Volatility 30D], Gold[Date] = d ), "0%" )
+
+MEASURE Gold[Pill Volume] =
+    VAR yr = YEAR ( MAX ( Gold[Date] ) )
+    VAR v  = CALCULATE ( AVERAGE ( Gold[Volume] ), ALL ( Gold ), ALL ( 'Calendar' ), Gold[Year] = yr )
+    RETURN "▲ " & yr & ": " & FORMAT ( v / 1000, "#,0" ) & "K per day"
+
+EVALUATE ROW ( "Check", [Pill Close Price], "Band", [Phase Band] )
