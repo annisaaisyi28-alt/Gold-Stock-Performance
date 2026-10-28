@@ -3,6 +3,7 @@
 #
 📊 **Dataset Summary**
 - Total Data: 2968 rows, 6 columns
+- Source: Kaggle (https://www.kaggle.com/datasets/shakhnoza12/gold-price-analysis-20002026/code)
 #
 | Column Name | Description                                     |
 |-------------|-------------------------------------------------|
